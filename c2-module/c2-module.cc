@@ -44,7 +44,7 @@
 
 #define ALIGN(num, to) (((num) + (to - 1)) & (~(to - 1)))
 
-std::shared_ptr<C2Factory::QC2ComponentStoreFactory> C2Factory::factory_ = nullptr;
+std::shared_ptr<QC2ComponentStoreFactory> C2Factory::factory_ = nullptr;
 std::mutex C2Factory::lock_;
 
 template<typename ...Args> std::runtime_error Exception(Args&&... args) {

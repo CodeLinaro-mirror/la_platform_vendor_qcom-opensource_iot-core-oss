@@ -16,6 +16,8 @@ LOCAL_SHARED_LIBRARIES := \
     libqcodec2_core \
     libcodec2_vndk
 
+LOCAL_HEADER_LIBRARIES := libqcodec2_core_api_headers
+
 include $(BUILD_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)

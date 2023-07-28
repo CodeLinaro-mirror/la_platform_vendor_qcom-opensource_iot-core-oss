@@ -47,6 +47,8 @@
 #include <C2Component.h>
 #include <C2Buffer.h>
 
+#include <QC2ComponentStoreFactory.h>
+
 // TODO This needs to be exported by Codec2
 enum class C2PixelFormat : uint32_t {
   kUnknown   = 0,
@@ -215,10 +217,6 @@ class C2Factory {
   static C2Module* GetModule(std::string name);
 
  private:
-  struct QC2ComponentStoreFactory {
-      virtual ~QC2ComponentStoreFactory() = default;
-      virtual std::shared_ptr<C2ComponentStore> getInstance() = 0;
-  };
 
   using QC2ComponentStoreFactoryGetter_t =
       QC2ComponentStoreFactory* (*)(int major, int minor);
