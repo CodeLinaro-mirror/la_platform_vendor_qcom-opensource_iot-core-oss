@@ -76,6 +76,7 @@ enum class C2PixelFormat : uint32_t {
 enum class C2EventType : uint32_t {
   kError,
   kEOS,
+  kDrop
 };
 
 /** IC2Notifier
