@@ -49,6 +49,10 @@
 
 #include <QC2ComponentStoreFactory.h>
 
+#if defined(ENABLE_AUDIO_PLUGINS)
+#include <codec2/QC2Buffer.h>
+#endif //ENABLE_AUDIO_PLUGINS
+
 // TODO This needs to be exported by Codec2
 enum class C2PixelFormat : uint32_t {
   kUnknown   = 0,
@@ -72,6 +76,12 @@ enum class C2PixelFormat : uint32_t {
   kYV12      = 842094169,
 };
 
+enum class C2ModeType : uint32_t {
+  kVideoEncode,
+  kVideoDecode,
+  kAudioEncode,
+  kAudioDecode,
+};
 
 enum class C2EventType : uint32_t {
   kError,
@@ -138,13 +148,17 @@ class C2GraphicMemory {
  **/
 class C2Module {
  public:
-  C2Module(std::shared_ptr<C2Component>& component);
+  C2Module(std::shared_ptr<C2Component>& component, C2ModeType mode);
   ~C2Module();
 
   c2_status_t Initialize(std::shared_ptr<IC2Notifier>& notifier);
 
   std::shared_ptr<C2GraphicMemory> GetGraphicMemory();
   std::shared_ptr<C2LinearMemory> GetLinearMemory();
+#if defined(ENABLE_AUDIO_PLUGINS)
+  std::shared_ptr<qc2audio::QC2BufferCirclePools> GetLinearCirclePool(
+      uint32_t size);
+#endif //ENABLE_AUDIO_PLUGINS
 
   std::unique_ptr<C2Param> QueryParam(C2Param::Index index);
   c2_status_t SetParam(std::unique_ptr<C2Param>& param);
@@ -179,6 +193,11 @@ class C2Module {
 
   std::shared_ptr<C2GraphicMemory>      graphic_mem_;
   std::shared_ptr<C2LinearMemory>       linear_mem_;
+#if defined(ENABLE_AUDIO_PLUGINS)
+  std::shared_ptr<qc2audio::QC2BufferCirclePools> linear_circle_pool_;
+#endif //ENABLE_AUDIO_PLUGINS
+
+  C2ModeType                                      mode_;
 
   std::mutex                            lock_;
 };
@@ -215,14 +234,15 @@ class C2Listener : public C2Component::Listener {
  **/
 class C2Factory {
  public:
-  static C2Module* GetModule(std::string name);
+  static C2Module* GetModule(std::string name, C2ModeType mode);
 
  private:
 
   using QC2ComponentStoreFactoryGetter_t =
       QC2ComponentStoreFactory* (*)(int major, int minor);
 
-  static std::shared_ptr<QC2ComponentStoreFactory> factory_;
+  static std::shared_ptr<QC2ComponentStoreFactory> factory_video_;
+  static std::shared_ptr<QC2ComponentStoreFactory> factory_audio_;
   static std::mutex                                lock_;
 };
 
