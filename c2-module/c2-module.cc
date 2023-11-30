@@ -56,7 +56,8 @@ template<typename ...Args> std::runtime_error Exception(Args&&... args) {
 
 std::shared_ptr<C2GraphicBlock> C2GraphicMemory::Fetch(uint32_t width,
                                                        uint32_t height,
-                                                       C2PixelFormat format) {
+                                                       C2PixelFormat format,
+                                                       bool isheic) {
 
   if (width == 0 || height == 0) {
     throw Exception("One or more dimensions are 0 !");
@@ -69,7 +70,14 @@ std::shared_ptr<C2GraphicBlock> C2GraphicMemory::Fetch(uint32_t width,
 #if !defined(ANDROID)
   switch (format) {
     case C2PixelFormat::kNV12:
-      fmt = GBM_FORMAT_NV12;
+      fmt = isheic ? GBM_FORMAT_IMPLEMENTATION_DEFINED : GBM_FORMAT_NV12;
+      if (isheic) {
+#ifdef GBM_BO_USAGE_PRIVATE_HEIF
+        usage.expected |= GBM_BO_USAGE_PRIVATE_HEIF;
+#else
+        throw Exception("HEIF is not supported in GBM!");
+#endif // GBM_BO_USAGE_PRIVATE_HEIF
+      }
       break;
     case C2PixelFormat::kNV12UBWC:
       fmt = GBM_FORMAT_NV12;
