@@ -124,7 +124,7 @@ class C2GraphicMemory {
   uint64_t GetLocalId() { return pool_->getLocalId(); }
 
   std::shared_ptr<C2GraphicBlock> Fetch(uint32_t width, uint32_t height,
-                                        C2PixelFormat format);
+                                        C2PixelFormat format, bool isheic);
 
  private:
   std::shared_ptr<C2BlockPool> pool_;
