@@ -56,7 +56,8 @@ template<typename ...Args> std::runtime_error Exception(Args&&... args) {
 
 std::shared_ptr<C2GraphicBlock> C2GraphicMemory::Fetch(uint32_t width,
                                                        uint32_t height,
-                                                       C2PixelFormat format) {
+                                                       C2PixelFormat format,
+                                                       bool isheic) {
 
   if (width == 0 || height == 0) {
     throw Exception("One or more dimensions are 0 !");
@@ -69,7 +70,14 @@ std::shared_ptr<C2GraphicBlock> C2GraphicMemory::Fetch(uint32_t width,
 #if !defined(ANDROID)
   switch (format) {
     case C2PixelFormat::kNV12:
-      fmt = GBM_FORMAT_NV12;
+      fmt = isheic ? GBM_FORMAT_IMPLEMENTATION_DEFINED : GBM_FORMAT_NV12;
+      if (isheic) {
+#ifdef GBM_BO_USAGE_PRIVATE_HEIF
+        usage.expected |= GBM_BO_USAGE_PRIVATE_HEIF;
+#else
+        throw Exception("HEIF is not supported in GBM!");
+#endif // GBM_BO_USAGE_PRIVATE_HEIF
+      }
       break;
     case C2PixelFormat::kNV12UBWC:
       fmt = GBM_FORMAT_NV12;
@@ -402,7 +410,15 @@ void C2Module::HandleWorkDone(std::list<std::unique_ptr<C2Work>> witems) {
       continue;
     }
 
-    // Porcess the worklets.
+    if (flags & C2FrameData::FLAG_DROP_FRAME ||
+        flags & C2FrameData::FLAG_DISCARD_FRAME ||
+        (worklet->output.buffers.empty() && (flags == 0))) {
+      uint64_t index = worklet->output.ordinal.frameIndex.peeku();
+      notifier_->EventHandler(C2EventType::kDrop, &index);
+      continue;
+    }
+
+    // Process the worklets.
     if (work->workletsProcessed > 0 && !worklet->output.buffers.empty()) {
       auto buffer = worklet->output.buffers[0];
       uint64_t index = worklet->output.ordinal.frameIndex.peeku();
@@ -431,16 +447,16 @@ C2Module* C2Factory::GetModule(std::string name) {
   // Initialize Codec2 Store Factory.
   if (!factory_) {
     void* handle = dlopen("libqcodec2_core.so", RTLD_NOW);
-    if (!handle || dlerror()) {
-      throw std::runtime_error(dlerror() ? dlerror() : "dlopen failed!");
+    if (!handle) {
+      throw std::runtime_error("dlopen failed, error: " + std::string(dlerror()));
     }
 
     const char* method = "QC2ComponentStoreFactoryGetter";
     auto FactoryGetter = (QC2ComponentStoreFactoryGetter_t)dlsym(handle, method);
 
-    if ((FactoryGetter == nullptr) || dlerror()) {
+    if ((FactoryGetter == nullptr)) {
       dlclose(handle);
-      throw std::runtime_error(dlerror() ? dlerror() : "dlsym failed!");
+      throw std::runtime_error("dlsym failed, error: " + std::string(dlerror()));
     }
 
     // Get version 1.0 of the Codec2 Store Factory.
