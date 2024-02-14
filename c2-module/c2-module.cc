@@ -42,9 +42,12 @@
 #include <C2AllocatorGBM.h>
 #endif // !ANDROID
 
+#define MAX_CIRCLE_POOL_BUFS      (16)
+
 #define ALIGN(num, to) (((num) + (to - 1)) & (~(to - 1)))
 
-std::shared_ptr<QC2ComponentStoreFactory> C2Factory::factory_ = nullptr;
+std::shared_ptr<QC2ComponentStoreFactory> C2Factory::factory_video_ = nullptr;
+std::shared_ptr<QC2ComponentStoreFactory> C2Factory::factory_audio_ = nullptr;
 std::mutex C2Factory::lock_;
 
 template<typename ...Args> std::runtime_error Exception(Args&&... args) {
@@ -56,7 +59,8 @@ template<typename ...Args> std::runtime_error Exception(Args&&... args) {
 
 std::shared_ptr<C2GraphicBlock> C2GraphicMemory::Fetch(uint32_t width,
                                                        uint32_t height,
-                                                       C2PixelFormat format) {
+                                                       C2PixelFormat format,
+                                                       bool isheic) {
 
   if (width == 0 || height == 0) {
     throw Exception("One or more dimensions are 0 !");
@@ -69,7 +73,14 @@ std::shared_ptr<C2GraphicBlock> C2GraphicMemory::Fetch(uint32_t width,
 #if !defined(ANDROID)
   switch (format) {
     case C2PixelFormat::kNV12:
-      fmt = GBM_FORMAT_NV12;
+      fmt = isheic ? GBM_FORMAT_IMPLEMENTATION_DEFINED : GBM_FORMAT_NV12;
+      if (isheic) {
+#ifdef GBM_BO_USAGE_PRIVATE_HEIF
+        usage.expected |= GBM_BO_USAGE_PRIVATE_HEIF;
+#else
+        throw Exception("HEIF is not supported in GBM!");
+#endif // GBM_BO_USAGE_PRIVATE_HEIF
+      }
       break;
     case C2PixelFormat::kNV12UBWC:
       fmt = GBM_FORMAT_NV12;
@@ -115,9 +126,10 @@ std::shared_ptr<C2LinearBlock> C2LinearMemory::Fetch(uint32_t size) {
   return block;
 }
 
-C2Module::C2Module (std::shared_ptr<C2Component>& component)
+C2Module::C2Module (std::shared_ptr<C2Component>& component, C2ModeType mode)
     : component_(component),
       state_(State::kCreated),
+      mode_(mode),
       notifier_(nullptr) {
 
   // Get local pointer to the underlying component interface.
@@ -146,10 +158,8 @@ c2_status_t C2Module::Initialize(std::shared_ptr<IC2Notifier>& notifier) {
   state_ = State::kIdle;
 
 #if defined(CODEC2_CONFIG_VERSION_2_0)
-  bool decoding = (interface_->getName().find("decoder") != std::string::npos);
-
-  if (!decoding) {
-    // Output buffer pool for the encoder is not properly supported.
+  if (mode_ != C2ModeType::kVideoDecode) {
+    // Output buffer pool for the encoder and audio is not properly supported.
     return C2_OK;
   }
 
@@ -227,6 +237,37 @@ std::shared_ptr<C2LinearMemory> C2Module::GetLinearMemory() {
 
   return linear_mem_;
 }
+
+#if defined(ENABLE_AUDIO_PLUGINS)
+std::shared_ptr<qc2audio::QC2BufferCirclePools>
+C2Module::GetLinearCirclePool(uint32_t size) {
+
+  std::lock_guard<std::mutex> lk(lock_);
+
+  if (!linear_circle_pool_) {
+    std::shared_ptr<C2BlockPool> pool;
+
+    auto status = ::android::GetCodec2BlockPool(
+        C2AllocatorStore::DEFAULT_LINEAR, component_, &pool);
+
+    if (status != C2_OK) {
+      throw Exception("Component[", interface_->getName().c_str(), "]: "
+          "Unable to get linear block pool, error: ", status, "!");
+    }
+
+    std::shared_ptr<qc2audio::QC2LinearBufferPool> linear_pool =
+        std::make_unique<qc2audio::QC2LinearBufferPool>(pool,
+        C2MemoryUsage::CPU_READ | C2MemoryUsage::CPU_WRITE);
+    linear_pool->setBufferSize(size);
+
+    linear_circle_pool_ =
+        std::make_shared<qc2audio::QC2BufferCirclePools>(
+        MAX_CIRCLE_POOL_BUFS, linear_pool);
+  }
+
+  return linear_circle_pool_;
+}
+#endif //ENABLE_AUDIO_PLUGINS
 
 std::unique_ptr<C2Param> C2Module::QueryParam(C2Param::Index index) {
 
@@ -402,7 +443,9 @@ void C2Module::HandleWorkDone(std::list<std::unique_ptr<C2Work>> witems) {
       continue;
     }
 
-    if (flags & C2FrameData::FLAG_DROP_FRAME) {
+    if (flags & C2FrameData::FLAG_DROP_FRAME ||
+        flags & C2FrameData::FLAG_DISCARD_FRAME ||
+        (worklet->output.buffers.empty() && (flags == 0))) {
       uint64_t index = worklet->output.ordinal.frameIndex.peeku();
       notifier_->EventHandler(C2EventType::kDrop, &index);
       continue;
@@ -430,23 +473,33 @@ void C2Module::HandleError(uint32_t error) {
   notifier_->EventHandler(C2EventType::kError, &error);
 }
 
-C2Module* C2Factory::GetModule(std::string name) {
+C2Module* C2Factory::GetModule(std::string name, C2ModeType mode) {
 
   std::lock_guard<std::mutex> lk(C2Factory::lock_);
 
+  bool is_audio =
+      mode == C2ModeType::kAudioEncode ||
+      mode == C2ModeType::kAudioDecode;
+
   // Initialize Codec2 Store Factory.
-  if (!factory_) {
-    void* handle = dlopen("libqcodec2_core.so", RTLD_NOW);
-    if (!handle || dlerror()) {
-      throw std::runtime_error(dlerror() ? dlerror() : "dlopen failed!");
+  if ((is_audio && !factory_audio_) || (!is_audio && !factory_video_)) {
+    const char* dll_lib = is_audio ?
+        "libqc2audio_core.so" :
+        "libqcodec2_core.so";
+    const char* method = is_audio ?
+        "QC2AudioComponentStoreFactoryGetter" :
+        "QC2ComponentStoreFactoryGetter";
+
+    void* handle = dlopen(dll_lib, RTLD_NOW);
+    if (!handle) {
+      throw std::runtime_error("dlopen failed, error: " + std::string(dlerror()));
     }
 
-    const char* method = "QC2ComponentStoreFactoryGetter";
     auto FactoryGetter = (QC2ComponentStoreFactoryGetter_t)dlsym(handle, method);
 
-    if ((FactoryGetter == nullptr) || dlerror()) {
+    if ((FactoryGetter == nullptr)) {
       dlclose(handle);
-      throw std::runtime_error(dlerror() ? dlerror() : "dlsym failed!");
+      throw std::runtime_error("dlsym failed, error: " + std::string(dlerror()));
     }
 
     // Get version 1.0 of the Codec2 Store Factory.
@@ -456,16 +509,22 @@ C2Module* C2Factory::GetModule(std::string name) {
       throw std::runtime_error("Unable to fetch Codec2 Store Factory!");
     }
 
-    factory_ = std::shared_ptr<QC2ComponentStoreFactory>(sfactory,
+    auto factory = std::shared_ptr<QC2ComponentStoreFactory>(sfactory,
         [handle](QC2ComponentStoreFactory* factory) {
           delete factory;
           dlclose(handle);
         }
     );
+    if (is_audio) {
+      factory_audio_ = factory;
+    } else {
+      factory_video_ = factory;
+    }
   }
 
   // Fetch an instance of the Codec2 store.
-  std::shared_ptr<C2ComponentStore> store = factory_->getInstance();
+  std::shared_ptr<C2ComponentStore> store =
+      is_audio ? factory_audio_->getInstance() : factory_video_->getInstance();
   if (!store) {
     throw std::runtime_error("Unable to get Codec2 Store!");
   }
@@ -479,5 +538,5 @@ C2Module* C2Factory::GetModule(std::string name) {
         "', error: ", status, " !");
   }
 
-  return new C2Module(component);
+  return new C2Module(component, mode);
 }
