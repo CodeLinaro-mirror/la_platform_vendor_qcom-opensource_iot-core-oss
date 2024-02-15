@@ -19,11 +19,13 @@ set_target_properties(${GST_QTI_C2_MODULE} PROPERTIES PUBLIC_HEADER
 
 target_compile_definitions(${GST_QTI_C2_MODULE} PRIVATE
   $<$<STREQUAL:${GST_CODEC2_CONFIG_VERSION},2.0>:CODEC2_CONFIG_VERSION_2_0>
-  _LINUX_
+  __LINUX__
+  $<$<BOOL:${GST_ENABLE_AUDIO_PLUGINS}>:ENABLE_AUDIO_PLUGINS>
 )
 
 target_link_libraries(${GST_QTI_C2_MODULE} PRIVATE
   codec2_vndk
+  $<$<BOOL:${GST_ENABLE_AUDIO_PLUGINS}>:qc2audio_utils>
 )
 
 install(
