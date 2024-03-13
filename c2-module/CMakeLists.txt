@@ -20,10 +20,18 @@ set_target_properties(${GST_QTI_C2_MODULE} PROPERTIES PUBLIC_HEADER
 target_compile_definitions(${GST_QTI_C2_MODULE} PRIVATE
   $<$<STREQUAL:${GST_CODEC2_CONFIG_VERSION},2.0>:CODEC2_CONFIG_VERSION_2_0>
   _LINUX_
+  $<$<BOOL:${GST_ENABLE_AUDIO_PLUGINS}>:ENABLE_AUDIO_PLUGINS>
+  # This is a WA due to mismatch of _LINUX_ and __LINUX__ defines
+  # in audio and video parts of the Codec2.
+  # Refer to this:
+  # codec2/codecs/include/QC2Config.h#28
+  # mm-audio-headers/codec2/codecs/include/QC2Config.h#14
+  $<$<BOOL:${GST_ENABLE_AUDIO_PLUGINS}>:__LINUX__>
 )
 
 target_link_libraries(${GST_QTI_C2_MODULE} PRIVATE
   codec2_vndk
+  $<$<BOOL:${GST_ENABLE_AUDIO_PLUGINS}>:qc2audio_utils>
 )
 
 install(
