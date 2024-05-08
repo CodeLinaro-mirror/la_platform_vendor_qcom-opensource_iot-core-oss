@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -302,6 +302,9 @@ c2_status_t C2Module::Start() {
   if (state_ == State::kCreated) {
     throw Exception("Component[", interface_->getName().c_str(), "]: "
         "Start failed! Not initialized!");
+  } else if (state_ == State::kError) {
+    throw Exception("Component[", interface_->getName().c_str(), "]: "
+        "Start failed! Codec2 is in error state!");
   } else if (state_ == State::kRunning) {
     return C2_OK;
   }
@@ -323,6 +326,9 @@ c2_status_t C2Module::Stop() {
   if (state_ == State::kCreated) {
     throw Exception("Component[", interface_->getName().c_str(), "]: "
         "Stop failed! Not initialized!");
+  } else if (state_ == State::kError) {
+    throw Exception("Component[", interface_->getName().c_str(), "]: "
+        "Stop failed! Codec2 is in error state!");
   } else if (state_ == State::kIdle) {
     return C2_OK;
   }
@@ -343,7 +349,10 @@ c2_status_t C2Module::Flush(C2Component::flush_mode_t mode) {
 
   if (state_ == State::kCreated) {
     throw Exception("Component[", interface_->getName().c_str(), "]: "
-        "Stop failed! Not initialized!");
+        "Flush failed! Not initialized!");
+  } else if (state_ == State::kError) {
+    throw Exception("Component[", interface_->getName().c_str(), "]: "
+        "Flush failed! Codec2 is in error state!");
   } else if (state_ == State::kIdle) {
     return C2_OK;
   }
@@ -367,6 +376,9 @@ c2_status_t C2Module::Drain(C2Component::drain_mode_t mode) {
   if (state_ == State::kCreated) {
     throw Exception("Component[", interface_->getName().c_str(), "]: "
         "Drain failed! Not initialized!");
+  } else if (state_ == State::kError) {
+    throw Exception("Component[", interface_->getName().c_str(), "]: "
+        "Drain failed! Codec2 is in error state!");
   } else if (state_ == State::kIdle) {
     return C2_OK;
   }
@@ -390,6 +402,9 @@ c2_status_t C2Module::Queue(std::shared_ptr<C2Buffer>& buffer,
   if (state_ == State::kCreated) {
     throw Exception("Component[", interface_->getName().c_str(), "]: "
         "Queue failed! Not initialized!");
+  } else if (state_ == State::kError) {
+    throw Exception("Component[", interface_->getName().c_str(), "]: "
+        "Queue failed! Codec2 is in error state!");
   } else if (state_ != State::kRunning) {
     throw Exception("Component[", interface_->getName().c_str(), "]: "
         "Queue failed! Not in running state!");
@@ -469,7 +484,7 @@ void C2Module::HandleTripped(
 }
 
 void C2Module::HandleError(uint32_t error) {
-
+  state_ = State::kError;
   notifier_->EventHandler(C2EventType::kError, &error);
 }
 
