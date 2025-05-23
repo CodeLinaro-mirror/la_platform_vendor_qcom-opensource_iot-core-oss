@@ -72,8 +72,14 @@ enum class C2PixelFormat : uint32_t {
 #else
   kP010      = 54,
 #endif
-  /// YVU 4:2:0 Planar (YV12)
+  // YVU 4:2:0 Planar (YV12)
   kYV12      = 842094169,
+  // NV12 EXT containing 2 frames in single buffer.
+  kNV12UBWC_FLEX_2_BATCH = 0x128,
+  // NV12 EXT containing 4 frames in single buffer.
+  kNV12UBWC_FLEX_4_BATCH = 0x129,
+  // NV12 EXT containing 8 frames in single buffer.
+  kNV12UBWC_FLEX_8_BATCH = 0x130,
 };
 
 enum class C2ModeType : uint32_t {
