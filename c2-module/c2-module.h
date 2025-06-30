@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -72,8 +72,41 @@ enum class C2PixelFormat : uint32_t {
 #else
   kP010      = 54,
 #endif
-  /// YVU 4:2:0 Planar (YV12)
+  // YVU 4:2:0 Planar (YV12)
   kYV12      = 842094169,
+  // NV12 EXT containing 2 frames in single buffer.
+  kNV12UBWC_FLEX_2_BATCH = 0x128,
+  // NV12 EXT containing 4 frames in single buffer.
+  kNV12UBWC_FLEX_4_BATCH = 0x129,
+  // NV12 EXT containing 8 frames in single buffer.
+  kNV12UBWC_FLEX_8_BATCH = 0x130,
+  // NV12 EXT containing 16 frames in single buffer.
+  kNV12UBWC_FLEX = 0x126,
+  // NV12 containing 16 frames in single buffer.
+  kNV12_FLEX = 0x125,
+  // NV12 containing 2 frames in single buffer.
+  kNV12_FLEX_2_BATCH = 0x140,
+  // NV12 containing 4 frames in single buffer.
+  kNV12_FLEX_4_BATCH = 0x141,
+  // NV12 containing 8 frames in single buffer.
+  kNV12_FLEX_8_BATCH = 0x142,
+
+  // P010 containing 16 frames in single buffer.
+  kP010_FLEX = 0x143,
+  // P010 containing 2 frames in single buffer.
+  kP010_FLEX_2_BATCH = 0x144,
+  // P010 containing 4 frames in single buffer.
+  kP010_FLEX_4_BATCH = 0x145,
+  // P010 containing 8 frames in single buffer.
+  kP010_FLEX_8_BATCH = 0x146,
+  // TP10 UBWC containing 16 frames in single buffer.
+  kTP10UBWC_FLEX = 0x147,
+  // TP10 UBWC containing 2 frames in single buffer.
+  kTP10UBWC_FLEX_2_BATCH = 0x148,
+  // TP10 UBWC containing 4 frames in single buffer.
+  kTP10UBWC_FLEX_4_BATCH = 0x149,
+  // TP10 UBWC containing 8 frames in single buffer.
+  kTP10UBWC_FLEX_8_BATCH = 0x14a,
 };
 
 enum class C2ModeType : uint32_t {
