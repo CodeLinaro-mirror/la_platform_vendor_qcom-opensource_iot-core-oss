@@ -157,7 +157,7 @@ c2_status_t C2Module::Initialize(std::shared_ptr<IC2Notifier>& notifier) {
   notifier_ = notifier;
   state_ = State::kIdle;
 
-#if defined(CODEC2_CONFIG_VERSION_2_0)
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2)
   if (mode_ != C2ModeType::kVideoDecode && mode_ != C2ModeType::kVideoEncode) {
     // Output buffer pool for audio is not properly supported.
     return C2_OK;
@@ -198,7 +198,7 @@ c2_status_t C2Module::Initialize(std::shared_ptr<IC2Notifier>& notifier) {
     throw Exception("Component[", interface_->getName().c_str(), "]: "
         "Failed to set parameter, error ", status, "!");
   }
-#endif // CODEC2_CONFIG_VERSION_2_0
+#endif // CODEC2_CONFIG_VERSION_MAJOR
 
   return C2_OK;
 }
