@@ -36,8 +36,10 @@
 
 #include <dlfcn.h>
 #include <sstream>
+#include <map>
 
 #include <C2PlatformSupport.h>
+#include <C2ParamInternal.h>
 #if !defined(ANDROID)
 #include <C2AllocatorGBM.h>
 #endif // !ANDROID
@@ -55,6 +57,279 @@ template<typename ...Args> std::runtime_error Exception(Args&&... args) {
   std::stringstream s;
   ((s << std::forward<Args>(args)), ...);
   return std::runtime_error(s.str());
+}
+
+namespace {
+
+struct C2StructLayout {
+  uint32_t size;
+  uint32_t alignment;
+};
+
+bool AddWithoutOverflow(uint64_t left, uint64_t right, uint32_t* result) {
+  if ((left > std::numeric_limits<uint32_t>::max()) ||
+      (right > std::numeric_limits<uint32_t>::max() - left))
+    return false;
+
+  *result = static_cast<uint32_t>(left + right);
+  return true;
+}
+
+bool GetStructLayout(const std::shared_ptr<C2ParamReflector>& reflector,
+    const C2StructDescriptor& desc, C2StructLayout* layout) {
+
+  // C2 structures are declared with C2_PACK, whose minimum alignment is 4.
+  uint32_t alignment = alignof(uint32_t);
+  uint64_t size = 0;
+
+  for (const C2FieldDescriptor& field : desc) {
+    uint32_t field_size = _C2ParamInspector::GetSize(field);
+    uint32_t field_alignment = 1;
+
+    if (field.type() & C2FieldDescriptor::STRUCT_FLAG) {
+      std::unique_ptr<C2StructDescriptor> subdesc = reflector->describe(
+          C2Param::CoreIndex(field.type()).coreIndex());
+      if (subdesc == nullptr)
+        return false;
+
+      C2StructLayout sublayout;
+      if (!GetStructLayout(reflector, *subdesc, &sublayout))
+        return false;
+
+      field_alignment = sublayout.alignment;
+    } else {
+      switch (field.type()) {
+        case C2FieldDescriptor::INT64:
+        case C2FieldDescriptor::UINT64:
+        case C2FieldDescriptor::CNTR64:
+          field_alignment = alignof(uint64_t);
+          break;
+        case C2FieldDescriptor::INT32:
+        case C2FieldDescriptor::UINT32:
+        case C2FieldDescriptor::CNTR32:
+        case C2FieldDescriptor::FLOAT:
+          field_alignment = alignof(uint32_t);
+          break;
+        case C2FieldDescriptor::STRING:
+        case C2FieldDescriptor::BLOB:
+          field_alignment = 1;
+          break;
+        default:
+          return false;
+      }
+    }
+
+    alignment = std::max(alignment, field_alignment);
+
+    uint64_t field_end = _C2ParamInspector::GetOffset(field);
+    if (field.extent() != 0)
+      field_end += static_cast<uint64_t>(field_size) * field.extent();
+
+    size = std::max(size, field_end);
+  }
+
+  size = (size + alignment - 1) & ~(static_cast<uint64_t>(alignment) - 1);
+  if (size > std::numeric_limits<uint32_t>::max())
+    return false;
+
+  layout->size = static_cast<uint32_t>(size);
+  layout->alignment = alignment;
+  return true;
+}
+
+}  // namespace
+
+C2ParamFieldMap::C2ParamFieldMap(std::shared_ptr<C2ParamReflector> reflector)
+    : reflector_(reflector) {
+}
+
+void C2ParamFieldMap::AddStructDesc(C2Param::Index index,
+    const std::string& path, uint32_t offset, uint32_t base_size,
+    const C2StructDescriptor& desc) {
+
+  for (const C2FieldDescriptor& field : desc) {
+    std::string name = path + "." + field.name();
+    uint32_t fieldoffset = 0;
+    if (!AddWithoutOverflow(offset, _C2ParamInspector::GetOffset(field),
+            &fieldoffset)) {
+      continue;
+    }
+
+    // Recurse into nested structures, provided they can be described.
+    if (field.type() & C2FieldDescriptor::STRUCT_FLAG) {
+      if (field.extent() != 1) {
+        continue;
+      }
+
+      std::unique_ptr<C2StructDescriptor> subdesc = reflector_->describe (
+          C2Param::CoreIndex(field.type()).coreIndex());
+      if (subdesc == nullptr) {
+        continue;
+      }
+
+      AddStructDesc (index, name, fieldoffset, base_size, *subdesc);
+      continue;
+    }
+
+    // Numeric fields, either single valued, a fixed size array or a flexible
+    // array. The latter is reported with an extent of 0 and, as the Codec2
+    // structure definitions place it last, extends to the end of the parameter.
+    switch (field.type()) {
+      case C2FieldDescriptor::INT32:
+      case C2FieldDescriptor::UINT32:
+      case C2FieldDescriptor::CNTR32:
+      case C2FieldDescriptor::INT64:
+      case C2FieldDescriptor::UINT64:
+      case C2FieldDescriptor::CNTR64:
+      case C2FieldDescriptor::FLOAT:
+      case C2FieldDescriptor::STRING:
+      case C2FieldDescriptor::BLOB:
+        break;
+      default:
+        continue;
+    }
+
+    // The offset of a param field is relative to the start of the parameter,
+    // which includes the parameter header. The size is that of a single
+    // element, so that a supported values query refers to the first one.
+    uint32_t param_offset = 0;
+    if (!AddWithoutOverflow(sizeof(C2Param), fieldoffset, &param_offset))
+      continue;
+
+    _C2FieldId fieldid(param_offset, _C2ParamInspector::GetSize(field));
+
+    fields_.push_back ({
+        name,
+        _C2ParamInspector::CreateParamField (index, fieldid),
+        field.type(),
+        static_cast<uint32_t>(field.extent()),
+        base_size,
+    });
+  }
+}
+
+uint32_t C2ParamFieldMap::AddParamDescriptors(
+    const std::vector<std::shared_ptr<C2ParamDescriptor>>& descriptors) {
+
+  uint32_t n_params = 0;
+
+  for (const std::shared_ptr<C2ParamDescriptor>& descriptor : descriptors) {
+    if (descriptor == nullptr)
+      continue;
+
+    if (descriptor->isReadOnly())
+      continue;
+
+    // Requested parameters are aliases of their actual counterpart.
+    if (descriptor->index() & C2Param::CoreIndex::IS_REQUEST_FLAG)
+      continue;
+
+    C2Param::Index index = descriptor->index();
+
+    std::unique_ptr<C2StructDescriptor> desc =
+        reflector_->describe (index.coreIndex());
+    if (desc == nullptr) {
+      continue;
+    }
+
+    uint32_t base_size = sizeof(C2Param);
+    if (index & C2Param::CoreIndex::IS_FLEX_FLAG) {
+      C2StructLayout layout;
+      if (!GetStructLayout(reflector_, *desc, &layout) ||
+          !AddWithoutOverflow(sizeof(C2Param), layout.size, &base_size)) {
+        continue;
+      }
+    }
+
+    std::string name = descriptor->name();
+
+    // Prefix vendor parameters to match the naming used by the Codec2 clients.
+    if (index.isVendor())
+      name = "vendor." + name;
+
+    AddStructDesc (index, name, 0 /* offset */, base_size, *desc);
+    n_params++;
+  }
+
+  return n_params;
+}
+
+bool C2ParamFieldMap::FindField(const std::string& name,
+    C2Param::Index* index, uint32_t* offset, uint32_t* size,
+    C2FieldDescriptor::type_t* type, uint32_t* extent) const {
+
+  return FindField(name, index, offset, size, type, extent, nullptr);
+}
+
+bool C2ParamFieldMap::FindField(const std::string& name,
+    C2Param::Index* index, uint32_t* offset, uint32_t* size,
+    C2FieldDescriptor::type_t* type, uint32_t* extent,
+    uint32_t* base_size) const {
+
+  for (const FieldInfo& info : fields_) {
+    if (info.name != name)
+      continue;
+
+    *index = _C2ParamInspector::GetIndex (info.field);
+    *offset = _C2ParamInspector::GetOffset (info.field);
+    *size = _C2ParamInspector::GetSize (info.field);
+    *type = info.type;
+
+    if (extent != nullptr)
+      *extent = info.extent;
+
+    if (base_size != nullptr)
+      *base_size = info.base_size;
+
+    return true;
+  }
+
+  return false;
+}
+
+std::unique_ptr<C2Param> C2ParamFieldMap::AllocParam(C2Param::Index index,
+    uint32_t size, const C2Param* source) {
+
+  if (size < sizeof (C2Param)) {
+    return nullptr;
+  }
+
+  // Codec2 has no allocator for a parameter of a size only known at runtime,
+  // as the typed ones need the parameter type at compile time. Build the
+  // parameter the same way the Codec2 marshalling does, by laying out the
+  // header in front of the payload and letting C2Param::From() validate it.
+  // The allocation mirrors C2Param::Copy(), which is what the component uses
+  // for the heap parameters it returns from a query: plain operator new,
+  // released through the default deleter of std::unique_ptr<C2Param> as that
+  // is the type the Codec2 configuration API takes.
+  void *memory = ::operator new (size, std::nothrow);
+  if (memory == nullptr) {
+    return nullptr;
+  }
+
+  memset (memory, 0, size);
+
+  // C2Param is a standard layout type beginning with the size, followed by the
+  // index, both 32 bit. Composing the header by hand is what allows a size
+  // which does not match any of the compile time known parameter sizes.
+  const uint32_t header[2] = { size, static_cast<uint32_t>(index) };
+  memcpy (memory, header, sizeof (header));
+
+  if ((source != nullptr) && (source->size () > sizeof (C2Param))) {
+    uint32_t payload = std::min (
+        static_cast<uint32_t>(source->size ()), size) - sizeof (C2Param);
+
+    memcpy (reinterpret_cast<uint8_t*>(memory) + sizeof (C2Param),
+        reinterpret_cast<const uint8_t*>(source) + sizeof (C2Param), payload);
+  }
+
+  C2Param *param = C2Param::From (memory, size);
+  if (param == nullptr) {
+    ::operator delete (memory);
+    return nullptr;
+  }
+
+  return std::unique_ptr<C2Param> (param);
 }
 
 std::shared_ptr<C2GraphicBlock> C2GraphicMemory::Fetch(uint32_t width,
@@ -126,8 +401,10 @@ std::shared_ptr<C2LinearBlock> C2LinearMemory::Fetch(uint32_t size) {
   return block;
 }
 
-C2Module::C2Module (std::shared_ptr<C2Component>& component, C2ModeType mode)
+C2Module::C2Module (std::shared_ptr<C2Component>& component,
+                     std::shared_ptr<C2ComponentStore>& store, C2ModeType mode)
     : component_(component),
+      store_(store),
       state_(State::kCreated),
       mode_(mode),
       notifier_(nullptr) {
@@ -341,6 +618,295 @@ c2_status_t C2Module::SetParam(std::unique_ptr<C2Param>& param) {
   }
 
   return C2_OK;
+}
+
+template<typename T>
+static bool WriteNativeInt(int64_t value, void* field) {
+
+  if ((value < static_cast<int64_t>(std::numeric_limits<T>::min())) ||
+      (value > static_cast<int64_t>(std::numeric_limits<T>::max())))
+    return false;
+
+  T native = static_cast<T>(value);
+  memcpy(field, &native, sizeof(native));
+  return true;
+}
+
+static bool WriteNativeValue(int64_t integer, double number, bool is_float,
+    C2FieldDescriptor::type_t type, uint32_t size, void* field) {
+
+  if (is_float) {
+    if (size != sizeof(float))
+      return false;
+
+    float native = static_cast<float>(number);
+    memcpy(field, &native, sizeof(native));
+    return true;
+  }
+
+  switch (type) {
+    case C2FieldDescriptor::INT32:
+      return (size == sizeof(int32_t)) && WriteNativeInt<int32_t>(integer, field);
+    case C2FieldDescriptor::UINT32:
+    case C2FieldDescriptor::CNTR32:
+      return (size == sizeof(uint32_t)) && WriteNativeInt<uint32_t>(integer, field);
+    case C2FieldDescriptor::INT64:
+      return (size == sizeof(int64_t)) && WriteNativeInt<int64_t>(integer, field);
+    case C2FieldDescriptor::UINT64:
+    case C2FieldDescriptor::CNTR64:
+      return (size == sizeof(uint64_t)) && WriteNativeInt<uint64_t>(integer, field);
+    default:
+      return false;
+  }
+}
+
+static bool AnyToScalar(const std::any& value, int64_t* integer) {
+
+  if (auto v = std::any_cast<int32_t>(&value))  { *integer = *v; return true; }
+  if (auto v = std::any_cast<uint32_t>(&value)) { *integer = *v; return true; }
+  if (auto v = std::any_cast<int64_t>(&value))  { *integer = *v; return true; }
+  if (auto v = std::any_cast<uint64_t>(&value)) { *integer = static_cast<int64_t>(*v); return true; }
+
+  return false;
+}
+
+// Extracts a float from `value`, the native C2 FLOAT field type.
+static bool AnyToScalar(const std::any& value, double* number) {
+
+  if (auto v = std::any_cast<float>(&value)) { *number = *v; return true; }
+
+  return false;
+}
+
+// Translates `value` into the native byte representation of `type`.
+static bool AnyToBuffer(const std::any& value, C2FieldDescriptor::type_t type,
+    uint32_t size, std::vector<uint8_t>* buffer) {
+
+  if (type == C2FieldDescriptor::STRING) {
+    if (size != 1)
+      return false;
+
+    if (auto v = std::any_cast<std::string>(&value)) {
+      buffer->assign(v->begin(), v->end());
+    } else {
+      return false;
+    }
+
+    if (buffer->empty() || buffer->back() != 0)
+      buffer->push_back(0);
+
+    return true;
+  }
+
+  if (type == C2FieldDescriptor::BLOB) {
+    if (size != 1)
+      return false;
+
+    if (auto v = std::any_cast<std::vector<uint8_t>>(&value)) {
+      *buffer = *v;
+      return true;
+    }
+
+    return false;
+  }
+
+  bool is_float = (type == C2FieldDescriptor::FLOAT);
+
+  int64_t integer = 0;
+  double number = 0.0;
+
+  bool ok = is_float ? AnyToScalar(value, &number) : AnyToScalar(value, &integer);
+  if (!ok)
+    return false;
+
+  buffer->resize(size);
+  return WriteNativeValue(integer, number, is_float, type, size,
+      buffer->data());
+}
+
+// A single field update, resolved to its parameter/field location and
+// already translated to its native representation, grouped and applied per
+// parameter index by C2Module::SetExtraParams().
+struct C2ParamFieldUpdate {
+  uint32_t                      offset;
+  uint32_t                      size;
+  uint32_t                      extent;
+  uint32_t                      base_size;
+  C2FieldDescriptor::type_t     type;
+  std::vector<uint8_t>          value;
+};
+
+c2_status_t C2Module::SetExtraParams(
+    const std::vector<std::pair<std::string, std::any>>& fields) {
+
+  if (fields.empty())
+    return C2_OK;
+
+  C2ParamFieldMap& fieldmap = GetFieldMap();
+
+  // Group by parameter and field offset. A repeated field keeps its last value.
+  std::map<uint32_t, std::map<uint32_t, C2ParamFieldUpdate>> updates;
+
+  for (const auto& field : fields) {
+    C2Param::Index index(0u);
+    uint32_t offset = 0, size = 0, extent = 0, base_size = 0;
+    C2FieldDescriptor::type_t type;
+
+    if (!fieldmap.FindField(field.first, &index, &offset, &size, &type,
+            &extent, &base_size) || (size == 0))
+      continue;
+
+    std::vector<uint8_t> value;
+    if (!AnyToBuffer(field.second, type, size, &value) ||
+        (value.size() % size != 0) ||
+        (value.size() / size > std::numeric_limits<uint32_t>::max()))
+      continue;
+
+    uint32_t count = static_cast<uint32_t>(value.size() / size);
+    if ((extent != 0) && (count > extent))
+      continue;
+
+    updates[static_cast<uint32_t>(index)][offset] = {
+        offset, size, extent, base_size, type, std::move(value),
+    };
+  }
+
+  if (updates.empty())
+    return C2_OK;
+
+  c2_status_t result = C2_OK;
+
+  for (const auto& entry : updates) {
+    C2Param::Index index(entry.first);
+
+    try {
+      // Query the current value, so that fields which are not being set keep
+      // their value once the parameter is configured back.
+      std::unique_ptr<C2Param> param = QueryParam(index);
+      if (param == nullptr) {
+        result = C2_CORRUPTED;
+        continue;
+      }
+
+      // A C2 flexible parameter has one trailing flexible field. Resize once
+      // to BASE_SIZE + FLEX_SIZE * count, matching C2ParamDef.h exactly.
+      uint32_t target_size = static_cast<uint32_t>(param->size());
+      bool valid_size = true;
+
+      for (const auto& field_update : entry.second) {
+        const C2ParamFieldUpdate& update = field_update.second;
+        if (update.extent != 0)
+          continue;
+
+        if (!AddWithoutOverflow(update.base_size, update.value.size(),
+                &target_size)) {
+          valid_size = false;
+          break;
+        }
+      }
+
+      if (!valid_size) {
+        result = C2_BAD_VALUE;
+        continue;
+      }
+
+      if (target_size != param->size()) {
+        param = C2ParamFieldMap::AllocParam(index, target_size, param.get());
+        if (param == nullptr) {
+          result = C2_NO_MEMORY;
+          continue;
+        }
+      }
+
+      uint32_t applied = 0;
+
+      for (const auto& field_update : entry.second) {
+        const C2ParamFieldUpdate& update = field_update.second;
+        if (param->size() < update.base_size) {
+          result = C2_BAD_VALUE;
+          continue;
+        }
+
+        uint64_t capacity = update.extent == 0
+            ? param->size() - update.base_size
+            : static_cast<uint64_t>(update.extent) * update.size;
+        uint64_t end = static_cast<uint64_t>(update.offset) + update.value.size();
+        uint64_t capacity_end = static_cast<uint64_t>(update.offset) + capacity;
+
+        if ((update.value.size() > capacity) || (end > param->size()) ||
+            (capacity_end > param->size())) {
+          result = C2_BAD_VALUE;
+          continue;
+        }
+
+        uint8_t *dst = reinterpret_cast<uint8_t*>(param.get()) + update.offset;
+        if (update.type == C2FieldDescriptor::STRING)
+          memset(dst, 0, capacity);
+        if (!update.value.empty())
+          memcpy(dst, update.value.data(), update.value.size());
+
+        applied++;
+      }
+
+      if (applied == 0)
+        continue;
+
+      SetParam(param);
+    } catch (std::exception&) {
+      result = C2_CORRUPTED;
+    }
+  }
+
+  return result;
+}
+
+std::vector<std::shared_ptr<C2ParamDescriptor>>
+C2Module::QuerySupportedParams() {
+
+  std::vector<std::shared_ptr<C2ParamDescriptor>> descriptors;
+  auto status = interface_->querySupportedParams_nb(&descriptors);
+
+  if (status != C2_OK) {
+    throw Exception("Component[", interface_->getName().c_str(), "]: "
+        "Failed to query supported parameters, error ", status, "!");
+  }
+
+  return descriptors;
+}
+
+c2_status_t C2Module::QuerySupportedValues(
+    std::vector<C2FieldSupportedValuesQuery>& fields) {
+
+  auto status = interface_->querySupportedValues_vb(fields, C2_MAY_BLOCK);
+
+  if (status != C2_OK) {
+    throw Exception("Component[", interface_->getName().c_str(), "]: "
+        "Failed to query supported values, error ", status, "!");
+  }
+
+  return C2_OK;
+}
+
+std::shared_ptr<C2ParamReflector> C2Module::GetParamReflector() {
+
+  auto reflector = store_->getParamReflector();
+  if (!reflector) {
+    throw Exception("Component[", interface_->getName().c_str(), "]: "
+        "Failed to get parameter reflector!");
+  }
+
+  return reflector;
+}
+
+C2ParamFieldMap& C2Module::GetFieldMap() {
+
+  std::call_once(fieldmap_once_, [this]() {
+    auto fieldmap = std::make_unique<C2ParamFieldMap>(GetParamReflector());
+    fieldmap->AddParamDescriptors(QuerySupportedParams());
+    fieldmap_ = std::move(fieldmap);
+  });
+
+  return *fieldmap_;
 }
 
 c2_status_t C2Module::Start() {
@@ -601,5 +1167,5 @@ C2Module* C2Factory::GetModule(std::string name, C2ModeType mode) {
         "', error: ", status, " !");
   }
 
-  return new C2Module(component, mode);
+  return new C2Module(component, store, mode);
 }

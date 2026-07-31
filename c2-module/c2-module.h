@@ -42,6 +42,8 @@
 #include <queue>
 #include <exception>
 #include <tuple>
+#include <any>
+#include <utility>
 
 #include <C2Config.h>
 #include <C2Component.h>
@@ -173,6 +175,50 @@ class C2GraphicMemory {
   std::shared_ptr<C2BlockPool> pool_;
 };
 
+/** C2ParamFieldMap
+ *
+ * Looks up a Codec2 component's parameter fields by flat "parameter.field"
+ * name, built from the parameters' descriptors and the store's reflector.
+ **/
+class C2ParamFieldMap {
+ public:
+  explicit C2ParamFieldMap(std::shared_ptr<C2ParamReflector> reflector);
+  ~C2ParamFieldMap() = default;
+
+  uint32_t AddParamDescriptors(
+      const std::vector<std::shared_ptr<C2ParamDescriptor>>& descriptors);
+
+  bool FindField(const std::string& name, C2Param::Index* index,
+                 uint32_t* offset, uint32_t* size,
+                 C2FieldDescriptor::type_t* type,
+                 uint32_t* extent = nullptr) const;
+
+  bool FindField(const std::string& name, C2Param::Index* index,
+                 uint32_t* offset, uint32_t* size,
+                 C2FieldDescriptor::type_t* type, uint32_t* extent,
+                 uint32_t* base_size) const;
+
+  static std::unique_ptr<C2Param> AllocParam(C2Param::Index index,
+                                             uint32_t size,
+                                             const C2Param* source);
+
+ private:
+  void AddStructDesc(C2Param::Index index, const std::string& path,
+                     uint32_t offset, uint32_t base_size,
+                     const C2StructDescriptor& desc);
+
+  struct FieldInfo {
+    std::string name;
+    C2ParamField field;
+    C2FieldDescriptor::type_t type;
+    uint32_t extent;
+    uint32_t base_size;
+  };
+
+  std::shared_ptr<C2ParamReflector> reflector_;
+  std::vector<FieldInfo> fields_;
+};
+
 /** C2Module
  *
  * A light abstraction class on top of the Codec2 component providing
@@ -191,7 +237,8 @@ class C2Module {
     kGraphicNonContiguous,
   };
 
-  C2Module(std::shared_ptr<C2Component>& component, C2ModeType mode);
+  C2Module(std::shared_ptr<C2Component>& component,
+           std::shared_ptr<C2ComponentStore>& store, C2ModeType mode);
   ~C2Module();
 
   c2_status_t Initialize(std::shared_ptr<IC2Notifier>& notifier,
@@ -206,6 +253,19 @@ class C2Module {
 
   std::unique_ptr<C2Param> QueryParam(C2Param::Index index);
   c2_status_t SetParam(std::unique_ptr<C2Param>& param);
+  // Sets parameter fields by name (e.g. "vendor.foo.enable"), each paired
+  // with its value (a native int/float, or a std::vector of one for an
+  // array field). Fields left unspecified keep their current value.
+  c2_status_t SetExtraParams(
+      const std::vector<std::pair<std::string, std::any>>& fields);
+
+  // Returns the descriptors of all parameters supported by the component.
+  std::vector<std::shared_ptr<C2ParamDescriptor>> QuerySupportedParams();
+  // Fills in the supported values for each of the queried parameter fields.
+  c2_status_t QuerySupportedValues(
+      std::vector<C2FieldSupportedValuesQuery>& fields);
+  // Returns the parameter reflector shared by all components of the store.
+  std::shared_ptr<C2ParamReflector> GetParamReflector();
 
   c2_status_t Start();
   c2_status_t Stop();
@@ -230,8 +290,12 @@ class C2Module {
     kError,
   };
 
+  // Builds the field map on first use and caches it for the module's lifetime.
+  C2ParamFieldMap& GetFieldMap();
+
   std::shared_ptr<C2Component>          component_;
   std::shared_ptr<C2ComponentInterface> interface_;
+  std::shared_ptr<C2ComponentStore>     store_;
   std::atomic<State>                    state_;
 
   std::shared_ptr<IC2Notifier>          notifier_;
@@ -245,6 +309,9 @@ class C2Module {
   C2ModeType                                      mode_;
 
   std::mutex                            lock_;
+
+  std::once_flag                        fieldmap_once_;
+  std::unique_ptr<C2ParamFieldMap>      fieldmap_;
 };
 
 // TODO Can be made part of the C2Module
