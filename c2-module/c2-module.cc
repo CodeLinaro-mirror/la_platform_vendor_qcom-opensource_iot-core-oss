@@ -138,7 +138,8 @@ C2Module::C2Module (std::shared_ptr<C2Component>& component, C2ModeType mode)
 
 C2Module::~C2Module () { }
 
-c2_status_t C2Module::Initialize(std::shared_ptr<IC2Notifier>& notifier) {
+c2_status_t C2Module::Initialize(std::shared_ptr<IC2Notifier>& notifier,
+    C2Module::PoolType pool_type) {
 
   std::lock_guard<std::mutex> lk(lock_);
   auto listener = std::make_shared<C2Listener> (this);
@@ -158,24 +159,74 @@ c2_status_t C2Module::Initialize(std::shared_ptr<IC2Notifier>& notifier) {
   state_ = State::kIdle;
 
 #if (CODEC2_CONFIG_VERSION_MAJOR == 2)
-  if (mode_ != C2ModeType::kVideoEncode) {
-    // Output buffer pool for audio is not properly supported.
-    // Custom pool for decode leads to failure with dynamic resolution change.
-    return C2_OK;
+  C2Allocator::id_t pool_id;
+  bool is_graphic_pool = false;
+
+  // Default pool type option
+  switch (mode_) {
+    case C2ModeType::kVideoEncode:
+      pool_id = C2AllocatorStore::LINEAR_NON_CONTIGUOUS;
+      is_graphic_pool = false;
+      break;
+    case C2ModeType::kVideoDecode:
+      pool_id = C2AllocatorStore::GRAPHIC_NON_CONTIGUOUS;
+      is_graphic_pool = true;
+      break;
+    case C2ModeType::kAudioEncode:
+    case C2ModeType::kAudioDecode:
+      // Output buffer pool for audio is not properly supported.
+    default:
+      return C2_OK;
+  }
+  std::shared_ptr<C2BlockPool> pool;
+
+  // Update pool type via input
+  switch (pool_type) {
+    case C2Module::PoolType::kUnspecified:
+      break;
+    case C2Module::PoolType::kDefaultLinear:
+      pool_id = C2AllocatorStore::DEFAULT_LINEAR;
+      is_graphic_pool = false;
+      break;
+    case C2Module::PoolType::kDefaultGraphic:
+      pool_id = C2AllocatorStore::DEFAULT_GRAPHIC;
+      is_graphic_pool = true;
+      break;
+    case C2Module::PoolType::kLinearContiguous:
+      pool_id = C2AllocatorStore::LINEAR_CONTIGUOUS;
+      is_graphic_pool = false;
+      break;
+    case C2Module::PoolType::kLinearNonContiguous:
+      pool_id = C2AllocatorStore::LINEAR_NON_CONTIGUOUS;
+      is_graphic_pool = false;
+      break;
+    case C2Module::PoolType::kGraphicContiguous:
+      pool_id = C2AllocatorStore::GRAPHIC_CONTIGUOUS;
+      is_graphic_pool = true;
+      break;
+    case C2Module::PoolType::kGraphicNonContiguous:
+      pool_id = C2AllocatorStore::GRAPHIC_NON_CONTIGUOUS;
+      is_graphic_pool = true;
+      break;
+    default:
+      break;
   }
 
-  // Create output linear pool for buffer circulation for encode
-  std::shared_ptr<C2BlockPool> pool;
-  status = ::android::CreateCodec2BlockPool(C2AllocatorStore::LINEAR_NON_CONTIGUOUS,
-    component_, &pool);
+  status = ::android::CreateCodec2BlockPool(pool_id, component_, &pool);
 
   if (status != C2_OK) {
     throw Exception("Component[", interface_->getName().c_str(), "]: "
         "Unable to create output block pool, error: ", status, "!");
   }
 
-  linear_mem_ = std::make_shared<C2LinearMemory>(pool);
-  C2BlockPool::local_id_t id = linear_mem_->GetLocalId();
+  C2BlockPool::local_id_t id;
+  if (is_graphic_pool) {
+    graphic_mem_ = std::make_shared<C2GraphicMemory>(pool);
+    id = graphic_mem_->GetLocalId();
+  } else {
+    linear_mem_ = std::make_shared<C2LinearMemory>(pool);
+    id = linear_mem_->GetLocalId();
+  }
 
   // Register the buffer pool ID so that it is used by the component.
   auto pools = C2PortBlockPoolsTuning::output::AllocUnique({id});
