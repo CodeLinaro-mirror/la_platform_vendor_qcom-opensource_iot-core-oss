@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -80,33 +80,6 @@ enum class C2PixelFormat : uint32_t {
   kNV12UBWC_FLEX_4_BATCH = 0x129,
   // NV12 EXT containing 8 frames in single buffer.
   kNV12UBWC_FLEX_8_BATCH = 0x130,
-  // NV12 EXT containing 16 frames in single buffer.
-  kNV12UBWC_FLEX = 0x126,
-  // NV12 containing 16 frames in single buffer.
-  kNV12_FLEX = 0x125,
-  // NV12 containing 2 frames in single buffer.
-  kNV12_FLEX_2_BATCH = 0x140,
-  // NV12 containing 4 frames in single buffer.
-  kNV12_FLEX_4_BATCH = 0x141,
-  // NV12 containing 8 frames in single buffer.
-  kNV12_FLEX_8_BATCH = 0x142,
-
-  // P010 containing 16 frames in single buffer.
-  kP010_FLEX = 0x143,
-  // P010 containing 2 frames in single buffer.
-  kP010_FLEX_2_BATCH = 0x144,
-  // P010 containing 4 frames in single buffer.
-  kP010_FLEX_4_BATCH = 0x145,
-  // P010 containing 8 frames in single buffer.
-  kP010_FLEX_8_BATCH = 0x146,
-  // TP10 UBWC containing 16 frames in single buffer.
-  kTP10UBWC_FLEX = 0x147,
-  // TP10 UBWC containing 2 frames in single buffer.
-  kTP10UBWC_FLEX_2_BATCH = 0x148,
-  // TP10 UBWC containing 4 frames in single buffer.
-  kTP10UBWC_FLEX_4_BATCH = 0x149,
-  // TP10 UBWC containing 8 frames in single buffer.
-  kTP10UBWC_FLEX_8_BATCH = 0x14a,
 };
 
 enum class C2ModeType : uint32_t {
@@ -181,10 +154,21 @@ class C2GraphicMemory {
  **/
 class C2Module {
  public:
+  enum class PoolType : uint32_t {
+    kUnspecified,
+    kDefaultLinear,
+    kDefaultGraphic,
+    kLinearContiguous,
+    kLinearNonContiguous,
+    kGraphicContiguous,
+    kGraphicNonContiguous,
+  };
+
   C2Module(std::shared_ptr<C2Component>& component, C2ModeType mode);
   ~C2Module();
 
-  c2_status_t Initialize(std::shared_ptr<IC2Notifier>& notifier);
+  c2_status_t Initialize(std::shared_ptr<IC2Notifier>& notifier,
+                         PoolType pool_type = PoolType::kUnspecified);
 
   std::shared_ptr<C2GraphicMemory> GetGraphicMemory();
   std::shared_ptr<C2LinearMemory> GetLinearMemory();
