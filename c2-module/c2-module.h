@@ -181,10 +181,21 @@ class C2GraphicMemory {
  **/
 class C2Module {
  public:
+  enum class PoolType : uint32_t {
+    kUnspecified,
+    kDefaultLinear,
+    kDefaultGraphic,
+    kLinearContiguous,
+    kLinearNonContiguous,
+    kGraphicContiguous,
+    kGraphicNonContiguous,
+  };
+
   C2Module(std::shared_ptr<C2Component>& component, C2ModeType mode);
   ~C2Module();
 
-  c2_status_t Initialize(std::shared_ptr<IC2Notifier>& notifier);
+  c2_status_t Initialize(std::shared_ptr<IC2Notifier>& notifier,
+                         PoolType pool_type = PoolType::kUnspecified);
 
   std::shared_ptr<C2GraphicMemory> GetGraphicMemory();
   std::shared_ptr<C2LinearMemory> GetLinearMemory();
