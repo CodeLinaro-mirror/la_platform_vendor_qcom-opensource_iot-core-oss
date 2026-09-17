@@ -158,7 +158,7 @@ c2_status_t C2Module::Initialize(std::shared_ptr<IC2Notifier>& notifier,
   notifier_ = notifier;
   state_ = State::kIdle;
 
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2)
+#if defined(CODEC2_CONFIG_VERSION_2_0)
   C2Allocator::id_t pool_id;
   bool is_graphic_pool = false;
 
