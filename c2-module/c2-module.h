@@ -162,6 +162,7 @@ class C2Module {
     kLinearNonContiguous,
     kGraphicContiguous,
     kGraphicNonContiguous,
+    kSkip,
   };
 
   C2Module(std::shared_ptr<C2Component>& component, C2ModeType mode);

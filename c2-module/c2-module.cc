@@ -208,6 +208,8 @@ c2_status_t C2Module::Initialize(std::shared_ptr<IC2Notifier>& notifier,
       pool_id = C2AllocatorStore::GRAPHIC_NON_CONTIGUOUS;
       is_graphic_pool = true;
       break;
+    case C2Module::PoolType::kSkip:
+      return C2_OK;
     default:
       break;
   }
