@@ -287,12 +287,16 @@ std::shared_ptr<C2LinearMemory> C2Module::GetLinearMemory() {
 }
 
 #if defined(ENABLE_AUDIO_PLUGINS)
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 3)
+std::shared_ptr<qc2audio::QC2LinearBufferPool>
+#else
 std::shared_ptr<qc2audio::QC2BufferCirclePools>
-C2Module::GetLinearCirclePool(uint32_t size) {
+#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 3)
+C2Module::GetLinearBufferPool(uint32_t size) {
 
   std::lock_guard<std::mutex> lk(lock_);
 
-  if (!linear_circle_pool_) {
+  if (!linear_buffer_pool_) {
     std::shared_ptr<C2BlockPool> pool;
 
     auto status = ::android::GetCodec2BlockPool(
@@ -303,17 +307,27 @@ C2Module::GetLinearCirclePool(uint32_t size) {
           "Unable to get linear block pool, error: ", status, "!");
     }
 
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 3)
+    linear_buffer_pool_ =
+        std::make_shared<qc2audio::QC2LinearBufferPool>(pool,
+        C2MemoryUsage::CPU_READ | C2MemoryUsage::CPU_WRITE);
+#else
     std::shared_ptr<qc2audio::QC2LinearBufferPool> linear_pool =
         std::make_unique<qc2audio::QC2LinearBufferPool>(pool,
         C2MemoryUsage::CPU_READ | C2MemoryUsage::CPU_WRITE);
     linear_pool->setBufferSize(size);
 
-    linear_circle_pool_ =
+    linear_buffer_pool_ =
         std::make_shared<qc2audio::QC2BufferCirclePools>(
         MAX_CIRCLE_POOL_BUFS, linear_pool);
+#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 3)
   }
 
-  return linear_circle_pool_;
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 3)
+  linear_buffer_pool_->setBufferSize(size);
+#endif
+
+  return linear_buffer_pool_;
 }
 #endif //ENABLE_AUDIO_PLUGINS
 

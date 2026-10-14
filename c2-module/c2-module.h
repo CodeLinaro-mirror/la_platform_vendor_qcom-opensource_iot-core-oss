@@ -200,8 +200,13 @@ class C2Module {
   std::shared_ptr<C2GraphicMemory> GetGraphicMemory();
   std::shared_ptr<C2LinearMemory> GetLinearMemory();
 #if defined(ENABLE_AUDIO_PLUGINS)
-  std::shared_ptr<qc2audio::QC2BufferCirclePools> GetLinearCirclePool(
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 3)
+  std::shared_ptr<qc2audio::QC2LinearBufferPool> GetLinearBufferPool(
       uint32_t size);
+#else
+  std::shared_ptr<qc2audio::QC2BufferCirclePools> GetLinearBufferPool(
+      uint32_t size);
+#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 3)
 #endif //ENABLE_AUDIO_PLUGINS
 
   std::unique_ptr<C2Param> QueryParam(C2Param::Index index);
@@ -239,7 +244,11 @@ class C2Module {
   std::shared_ptr<C2GraphicMemory>      graphic_mem_;
   std::shared_ptr<C2LinearMemory>       linear_mem_;
 #if defined(ENABLE_AUDIO_PLUGINS)
-  std::shared_ptr<qc2audio::QC2BufferCirclePools> linear_circle_pool_;
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 3)
+  std::shared_ptr<qc2audio::QC2LinearBufferPool> linear_buffer_pool_;
+#else
+  std::shared_ptr<qc2audio::QC2BufferCirclePools> linear_buffer_pool_;
+#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 3)
 #endif //ENABLE_AUDIO_PLUGINS
 
   C2ModeType                                      mode_;
